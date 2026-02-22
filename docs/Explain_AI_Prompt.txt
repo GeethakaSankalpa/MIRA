@@ -1,0 +1,35 @@
+You are given a guide that outlines steps for implementing a project. For each step in the guide:
+
+1. **File Purpose**  
+   - Explain *why* each file is created.  
+   - Describe the role it plays in the overall project.  
+
+2. **Theoretical Understanding**  
+   - Break down the theoretical concepts behind the step.  
+   - Provide context so the reader understands *why* the step matters, not just *how* to do it.  
+
+3. **Practical Example**  
+   - Use concrete examples to illustrate the concepts.  
+   - For instance, if the step involves running tests with `pytest`:  
+     - Explain what `pytest` is.  
+     - Describe its purpose in software testing.  
+     - Show how tests are written using `pytest`.  
+     - Outline criteria for writing good tests (clarity, coverage, edge cases, expected outcomes).  
+     - Explain what developers should expect when running tests (pass/fail results, error messages, debugging insights).  
+
+4. **Step‑by‑Step Clarity**  
+   - Present the explanation separately for each step in the guide.  
+   - Ensure the reader gains both theoretical knowledge and practical understanding.  
+
+5. **Code Walkthrough**  
+   - For each file mentioned in the guide, explain the code line by line.  
+   - Provide a step‑by‑step breakdown of what each line does, why it is written that way, and how it contributes to the overall functionality.  
+   - Include commentary on best practices, common pitfalls, and alternative approaches where relevant.  
+
+---
+
+Your output should be:  
+- Clear, structured, and easy to follow.  
+- Written in a way that helps someone not only implement the guide but also understand the reasoning behind each part.  
+- Include examples, comparisons, and best practices where relevant.  
+- Provide both **conceptual explanations** and **line‑by‑line code walkthroughs** for maximum clarity.
