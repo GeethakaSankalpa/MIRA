@@ -1,25 +1,28 @@
 from __future__ import annotations
-import socket
+
 import logging
+import os
+import platform
+import socket
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import bindparam, text
 
-from app.main import app
 from app.db.neo4j import neo4j_client
-
-from sqlalchemy import text
 from app.db.postgres import engine
-
+from app.main import app
 
 # -----------------------------
 # Helpers (timestamp + folders)
 # -----------------------------
 def _timestamp() -> str:
-    # Example: 2026-02-21_14-30-45
+    # Example: 2026-02-22_23-20-02
     return datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 
 
@@ -45,8 +48,38 @@ def _setup_test_logger(log_file: Path) -> logging.Logger:
     fh.setLevel(logging.INFO)
     fh.setFormatter(fmt)
     logger.addHandler(fh)
-
     return logger
+
+
+def _port_open(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=1):
+            return True
+    except OSError:
+        return False
+
+
+def _neo4j_host_port() -> tuple[str, int]:
+    """
+    Read Neo4j connection details from env if available; fallback to localhost:7687.
+    Supports:
+      NEO4J_URI=bolt://localhost:7687
+    """
+    uri = os.getenv("NEO4J_URI", "bolt://localhost:7687")
+    u = urlparse(uri)
+    host = u.hostname or "localhost"
+    port = u.port or 7687
+    return host, port
+
+
+def _postgres_host_port() -> tuple[str, int]:
+    """
+    Read Postgres host/port from env if available; fallback to localhost:5433 (your local default).
+    In CI, this typically becomes 5432.
+    """
+    host = os.getenv("POSTGRES_HOST", "localhost")
+    port = int(os.getenv("POSTGRES_PORT", "5433"))
+    return host, port
 
 
 # -----------------------------
@@ -60,9 +93,7 @@ def pytest_configure(config: pytest.Config) -> None:
     - backend/test_reports/test_report_<timestamp>.html
     and wires pytest-html to use the timestamped report automatically.
     """
-    # rootpath will be backend/ because you run pytest from backend/
     backend_root = Path(config.rootpath)
-
     logs_dir = backend_root / "test_logs"
     reports_dir = backend_root / "test_reports"
     _ensure_dir(logs_dir)
@@ -74,6 +105,8 @@ def pytest_configure(config: pytest.Config) -> None:
 
     config._mira_test_log_file = log_file  # type: ignore[attr-defined]
     config._mira_test_report_file = report_file  # type: ignore[attr-defined]
+    config._mira_test_start = datetime.now()  # type: ignore[attr-defined]
+    config._mira_warnings: list[str] = []  # type: ignore[attr-defined]
 
     # auto-set html report path if pytest-html is installed
     if hasattr(config.option, "htmlpath"):
@@ -94,6 +127,10 @@ def pytest_sessionstart(session: pytest.Session) -> None:
     logger.info("TEST SESSION START")
     logger.info("Log file: %s", log_file)
     logger.info("HTML report: %s", report_file)
+    logger.info("Python: %s", sys.version.replace("\n", " "))
+    logger.info("Platform: %s | %s", platform.platform(), platform.machine())
+    logger.info("Pytest: %s", pytest.__version__)
+    logger.info("CWD: %s", os.getcwd())
     logger.info("=" * 80)
 
 
@@ -122,11 +159,46 @@ def pytest_runtest_makereport(item: pytest.Item, call: pytest.CallInfo[Any]):
         logger.info("SKIP | %s | duration=%.4fs", test_name, report.duration)
 
 
+def pytest_warning_recorded(
+    warning_message: Any,
+    when: str,
+    nodeid: str,
+    location: tuple[str, int, str] | None,
+) -> None:
+    """
+    Collect warnings so we can summarize them in the final test log.
+    """
+    msg = str(warning_message)
+    # Keep it short but useful
+    record = f"{when} | {nodeid} | {msg}"
+    # Store globally (pytest gives us no config here; use env-safe global via pytest)
+    # We'll attach it via the config in sessionfinish using a fallback approach.
+    pytest._mira_warning_buffer = getattr(pytest, "_mira_warning_buffer", [])  # type: ignore[attr-defined]
+    pytest._mira_warning_buffer.append(record)  # type: ignore[attr-defined]
+
+
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     logger: logging.Logger = session.config._mira_test_logger  # type: ignore[attr-defined]
+    start: datetime = session.config._mira_test_start  # type: ignore[attr-defined]
+    duration = (datetime.now() - start).total_seconds()
+
+    warnings = getattr(pytest, "_mira_warning_buffer", [])  # type: ignore[attr-defined]
+
     logger.info("=" * 80)
     logger.info("TEST SESSION END | exitstatus=%s", exitstatus)
     logger.info("Tests collected: %s", session.testscollected)
+    logger.info("Total duration: %.2fs", duration)
+
+    if warnings:
+        logger.info("Warnings: %d", len(warnings))
+        # Log up to first 20 warnings (enough for evidence)
+        for w in warnings[:20]:
+            logger.info("WARNING | %s", w)
+        if len(warnings) > 20:
+            logger.info("WARNING | ... (%d more warnings omitted)", len(warnings) - 20)
+    else:
+        logger.info("Warnings: 0")
+
     logger.info("Artifacts:")
     logger.info("Log file: %s", session.config._mira_test_log_file)  # type: ignore[attr-defined]
     logger.info("HTML report: %s", session.config._mira_test_report_file)  # type: ignore[attr-defined]
@@ -134,7 +206,7 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 
 
 # -----------------------------
-# Fixtures (your originals)
+# Fixtures
 # -----------------------------
 @pytest.fixture(scope="session", autouse=True)
 def neo4j_connection():
@@ -161,49 +233,51 @@ def created_concepts():
     """
     Tracks concept_ids created during a test.
     Test code should append concept_id into this list.
-    Cleanup removes only those concepts/embeddings.
+    Cleanup removes only those concepts/embeddings (safe cleanup).
     """
     concept_ids: list[str] = []
     yield concept_ids
 
+    ids = list(dict.fromkeys(concept_ids))  # de-dup preserving order
+    if not ids:
+        return
+
     # --- Neo4j cleanup: delete only created concept versions ---
-    if concept_ids:
-        with neo4j_client.driver.session() as session:
-            session.run(
-                """
-                MATCH (c:Concept)
-                WHERE c.concept_id IN $ids
-                DETACH DELETE c
-                """,
-                ids=concept_ids,
-            )
+    with neo4j_client.driver.session() as session:
+        session.run(
+            """
+            MATCH (c:Concept)
+            WHERE c.concept_id IN $ids
+            DETACH DELETE c
+            """,
+            ids=ids,
+        )
 
     # --- Postgres cleanup: delete only embeddings for those concept_ids ---
-    if concept_ids:
-        with engine.begin() as conn:
-            conn.execute(
-                text("DELETE FROM concept_embeddings WHERE concept_id = ANY(:ids)"),
-                {"ids": concept_ids},
-            )
+    stmt = text("DELETE FROM concept_embeddings WHERE concept_id IN :ids").bindparams(
+        bindparam("ids", expanding=True)
+    )
+    with engine.begin() as conn:
+        conn.execute(stmt, {"ids": ids})
 
-    # --- Postgres cleanup (optional): remove only test-generated query logs ---
-    # If your tests use source="test_suite" or "test_*", clean those only:
+    # --- Postgres cleanup: remove only test-generated query logs ---
     with engine.begin() as conn:
         conn.execute(text("DELETE FROM query_logs WHERE source LIKE 'test%'"))
 
 
-def _port_open(host: str, port: int) -> bool:
-    try:
-        with socket.create_connection((host, port), timeout=1):
-            return True
-    except OSError:
-        return False
-
-
-def pytest_runtest_setup(item):
+# -----------------------------
+# Integration gating (skip if deps down)
+# -----------------------------
+def pytest_runtest_setup(item: pytest.Item) -> None:
     if item.get_closest_marker("integration"):
-        # Neo4j bolt 7687, Postgres 5433 (your config), Qdrant 6333 optional
-        neo4j_ok = _port_open("localhost", 7687)
-        pg_ok = _port_open("localhost", 5433)
+        neo_host, neo_port = _neo4j_host_port()
+        pg_host, pg_port = _postgres_host_port()
+
+        neo4j_ok = _port_open(neo_host, neo_port)
+        pg_ok = _port_open(pg_host, pg_port)
+
         if not (neo4j_ok and pg_ok):
-            pytest.skip("Skipping integration test: Neo4j/Postgres not reachable")
+            pytest.skip(
+                f"Skipping integration test: deps not reachable "
+                f"(neo4j={neo_host}:{neo_port} pg={pg_host}:{pg_port})"
+            )
