@@ -29,8 +29,8 @@ jobs:
   classify-branch:
     runs-on: ubuntu-latest
     outputs:
-      branch_type:          ${{ steps.classify.outputs.branch_type }}
-      should_deploy:        ${{ steps.classify.outputs.should_deploy }}
+      branch_type:           ${{ steps.classify.outputs.branch_type }}
+      should_deploy:         ${{ steps.classify.outputs.should_deploy }}
       should_run_full_tests: ${{ steps.classify.outputs.should_run_full_tests }}
 
     steps:
@@ -83,8 +83,8 @@ jobs:
               ;;
           esac
 
-          echo "branch_type=$BRANCH_TYPE"               >> $GITHUB_OUTPUT
-          echo "should_deploy=$SHOULD_DEPLOY"           >> $GITHUB_OUTPUT
+          echo "branch_type=$BRANCH_TYPE"                    >> $GITHUB_OUTPUT
+          echo "should_deploy=$SHOULD_DEPLOY"                >> $GITHUB_OUTPUT
           echo "should_run_full_tests=$SHOULD_RUN_FULL_TESTS" >> $GITHUB_OUTPUT
 
           echo "-------------------------------"
@@ -143,10 +143,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run smoke tests
+      - name: Run tests        # ← changed: was pytest -m "smoke" --tb=short
         working-directory: backend
         run: |
-          pytest -m "smoke" --tb=short
+          pytest --tb=short
 
       - name: Upload test artifacts
         if: always()
