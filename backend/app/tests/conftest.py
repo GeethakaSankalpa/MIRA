@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import bindparam, text
 
-from app.db.neo4j import neo4j_client
+# from app.db.neo4j import neo4j_client
 from app.db.postgres import engine
 from app.main import app
 
@@ -211,9 +211,17 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 @pytest.fixture(scope="session", autouse=True)
 def neo4j_connection():
     """
-    Connect once per test session.
-    This avoids relying purely on FastAPI startup hooks.
+    Only connect to Neo4j if integration environment variables are present.
+    This allows minimal CI to run without Neo4j config.
     """
+    if not os.getenv("NEO4J_URI"):
+        # Minimal CI / local unit runs: no Neo4j required.
+        yield
+        return
+
+    # Lazy import so Settings() doesn't validate Neo4j unless needed.
+    from app.db.neo4j import neo4j_client
+
     neo4j_client.connect()
     yield
     neo4j_client.close()
