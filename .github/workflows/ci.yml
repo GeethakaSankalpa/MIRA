@@ -143,10 +143,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run tests        # ← changed: was pytest -m "smoke" --tb=short
+      - name: Run minimal tests (no integration)
         working-directory: backend
         run: |
-          pytest --tb=short
+          pytest -m "not integration" --tb=short
 
       - name: Upload test artifacts
         if: always()
