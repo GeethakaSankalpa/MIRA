@@ -1,61 +1,37 @@
-from __future__ import annotations
+import logging
+from neo4j import GraphDatabase, Driver
 
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from app.core.config import settings
+
+logger = logging.getLogger(__name__)
 
 
-class Settings(BaseSettings):
-    model_config = SettingsConfigDict(
-        env_file=("../.env", ".env"),  # try root .env first, then backend/.env if added later
-        env_file_encoding="utf-8",
-        extra="ignore",
-    )
+class Neo4jClient:
+    def __init__(self) -> None:
+        self._driver: Driver | None = None
 
-    # App
-    APP_ENV: str = "local"
-    APP_NAME: str = "MIRA"
-    LOG_LEVEL: str = "INFO"
+    def connect(self) -> None:
+        if self._driver is None:
+            # validate ONLY when Neo4j is actually used
+            settings.require_neo4j()
 
-    # Neo4j (optional by default; required only when Neo4j is used)
-    NEO4J_URI: str | None = Field(default=None)
-    NEO4J_USER: str | None = Field(default=None)
-    NEO4J_PASSWORD: str | None = Field(default=None)
-
-    # Postgres
-    POSTGRES_HOST: str = "localhost"
-    POSTGRES_PORT: int = 5432
-    POSTGRES_USER: str
-    POSTGRES_PASSWORD: str
-    POSTGRES_DB: str
-
-    # Qdrant (optional)
-    QDRANT_URL: str | None = None
-
-    @property
-    def POSTGRES_DSN(self) -> str:
-        return (
-            f"postgresql+psycopg://{self.POSTGRES_USER}:{self.POSTGRES_PASSWORD}"
-            f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
-        )
-
-    def require_neo4j(self) -> None:
-        """
-        Enforce Neo4j config only in code paths that actually need Neo4j.
-        This enables a clean minimal CI job without Neo4j.
-        """
-        missing: list[str] = []
-        if not self.NEO4J_URI:
-            missing.append("NEO4J_URI")
-        if not self.NEO4J_USER:
-            missing.append("NEO4J_USER")
-        if not self.NEO4J_PASSWORD:
-            missing.append("NEO4J_PASSWORD")
-
-        if missing:
-            raise RuntimeError(
-                f"Neo4j configuration missing: {', '.join(missing)}. "
-                f"Provide these env vars or disable Neo4j-dependent features/tests."
+            logger.info("Connecting to Neo4j at %s", settings.NEO4J_URI)
+            self._driver = GraphDatabase.driver(
+                settings.NEO4J_URI,
+                auth=(settings.NEO4J_USER, settings.NEO4J_PASSWORD),
             )
 
+    def close(self) -> None:
+        if self._driver is not None:
+            logger.info("Closing Neo4j connection")
+            self._driver.close()
+            self._driver = None
 
-settings = Settings()
+    @property
+    def driver(self) -> Driver:
+        if self._driver is None:
+            raise RuntimeError("Neo4j driver is not connected. Call connect() first.")
+        return self._driver
+
+
+neo4j_client = Neo4jClient()
