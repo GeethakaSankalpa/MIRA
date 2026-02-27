@@ -38,6 +38,9 @@ class Settings(BaseSettings):
             f"@{self.POSTGRES_HOST}:{self.POSTGRES_PORT}/{self.POSTGRES_DB}"
         )
 
+    def neo4j_is_configured(self) -> bool:
+        return bool(self.NEO4J_URI and self.NEO4J_USER and self.NEO4J_PASSWORD)
+    
     def require_neo4j(self) -> None:
         """
         Enforce Neo4j config only in code paths that actually need Neo4j.
